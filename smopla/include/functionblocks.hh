@@ -4,7 +4,7 @@
 #include "devicemanager.hh"
 #include "math.h"
 #include "crgb.hh"
-#include <pidcontroller.hh>
+#include <pid_t1_controller.hh>
 
 class FB_ConstTrue: public FunctionBlock{
     size_t output;
@@ -869,13 +869,13 @@ class FB_PIDSimple: public FunctionBlock{
     float maxOutput;
     bool directionInverse;
 
-    PIDController<float> *pid;
+    PID_T1::Controller<float> *pid;
     
     public:
         ErrorCode initPhase1(FBContext *ctx) override
         {
-            pid = new PIDController<float>(&feedbackValue, &outputValue, &setpointValue, minOutput, maxOutput, Mode::CLOSEDLOOP, directionInverse?Direction::REVERSE:Direction::DIRECT, 1000);
-            pid->SetKpTnTv(kp, tn_msecs, tv_msecs);
+            pid = new PID_T1::Controller<float>(&feedbackValue, &outputValue, &setpointValue, minOutput, maxOutput, PID_T1::Mode::CLOSEDLOOP, PID_T1::AntiWindup::ON_SWICH_OFF_INTEGRATOR, directionInverse?PID_T1::Direction::REVERSE:PID_T1::Direction::DIRECT, 1000);
+            pid->SetKpTnTv(kp, tn_msecs, tv_msecs, tv_msecs*0.2);
             return ErrorCode::OK;
         }
 

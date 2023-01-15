@@ -1,12 +1,11 @@
-#include "devicemanager.hh"
 #include "functionblocks.hh"
 #include "esp_log.h"
 #include "errorcodes.hh"
 #include <vector>
-#include "pidcontroller.hh"
 #include "common_in_project.hh"
 #include <math.h>
 #include "winfactboris_messages.hh"
+#include "devicemanager.hh"
 
 constexpr uint32_t TRIGGER_FALLBACK_TIME_MS = 3000;
 constexpr const char *TAG = "devicemanager";
@@ -19,9 +18,9 @@ DeviceManager::DeviceManager(HAL *hal):hal(hal)
 {
     currentExecutable = this->createInitialExecutable();
     nextExecutable = nullptr;
-    heaterPIDController = new PIDController<float>(&actualTemperature, &setpointHeater, &setpointTemperature, 0, 100, Mode::OFF, Direction::DIRECT, 1000);
-    airspeedPIDController = new PIDController<float>(&actualAirspeed, &setpointFan2, &setpointAirspeed, 0, 100, Mode::OFF, Direction::DIRECT, 1000);
-    ptnPIDController = new PIDController<float>(&actualPtn, &setpointVoltageOut, &setpointPtn, 0, 3.3, Mode::OFF, Direction::DIRECT, 1000);
+    heaterPIDController = new PID_T1::Controller<float>(&actualTemperature, &setpointHeater, &setpointTemperature, 0, 100, PID_T1::Mode::OFF, PID_T1::AntiWindup::ON_SWICH_OFF_INTEGRATOR, PID_T1::Direction::DIRECT, 1000);
+    airspeedPIDController = new PID_T1::Controller<float>(&actualAirspeed, &setpointFan2, &setpointAirspeed, 0, 100, PID_T1::Mode::OFF, PID_T1::AntiWindup::ON_SWICH_OFF_INTEGRATOR, PID_T1::Direction::DIRECT, 1000);
+    ptnPIDController = new PID_T1::Controller<float>(&actualPtn, &setpointVoltageOut, &setpointPtn, 0, 3.3, PID_T1::Mode::OFF, PID_T1::AntiWindup::ON_SWICH_OFF_INTEGRATOR, PID_T1::Direction::DIRECT, 1000);
 }
 
 ErrorCode DeviceManager::InitAndRun(){
@@ -559,13 +558,16 @@ ErrorCode DeviceManager::Loop()
         }
     }
     else if(experimentMode==ExperimentMode::openloop_heater){
-        heaterPIDController->SetMode(Mode::OFF, nowMsSteady);
+        heaterPIDController->SetMode(PID_T1::Mode::OFF, nowMsSteady);
         hal->SetHeaterDuty(this->setpointHeater);
         hal->SetFan2Duty(this->setpointFan2);
     }
     else if(experimentMode==ExperimentMode::closedloop_heater){
-        heaterPIDController->SetMode(Mode::CLOSEDLOOP, nowMsSteady);
-        if(heaterPIDController->SetKpTnTv(heaterKP, heaterTN_secs*1000, heaterTV_secs*1000)!=ErrorCode::OBJECT_NOT_CHANGED)
+        if(heaterReset){
+            heaterPIDController->Reset();
+        }
+        heaterPIDController->SetMode(PID_T1::Mode::CLOSEDLOOP, nowMsSteady);
+        if(heaterPIDController->SetKpTnTv(heaterKP, heaterTN_secs*1000, heaterTV_secs*1000, heaterTV_secs*200)==ErrorCode::OK)
         {
             ESP_LOGI(TAG, "SetKpTnTv to %F %F %F", heaterKP, heaterTN_secs, heaterTV_secs);
         }
@@ -579,7 +581,7 @@ ErrorCode DeviceManager::Loop()
         hal->SetFan2Duty(this->setpointFan2);
     }
     else if(experimentMode==ExperimentMode::openloop_ptn){
-        ptnPIDController->SetMode(Mode::OFF, nowMsSteady);
+        ptnPIDController->SetMode(PID_T1::Mode::OFF, nowMsSteady);
         float *voltages;
         hal->GetAnalogInputs(&voltages);
         hal->ColorizeLed(0, CRGB::FromTemperature(0, 3.3, voltages[0]));
@@ -589,8 +591,11 @@ ErrorCode DeviceManager::Loop()
         hal->SetAnalogOutput(this->setpointVoltageOut);
     }
     else if(experimentMode==ExperimentMode::closedloop_ptn){
-        ptnPIDController->SetMode(Mode::CLOSEDLOOP, nowMsSteady);
-        if(ptnPIDController->SetKpTnTv(ptnKP, ptnTN_secs*1000, ptnTV_secs*1000)!=ErrorCode::OBJECT_NOT_CHANGED)
+        if(ptnReset){
+            ptnPIDController->Reset();
+        }
+        ptnPIDController->SetMode(PID_T1::Mode::CLOSEDLOOP, nowMsSteady);
+        if(ptnPIDController->SetKpTnTv(ptnKP, ptnTN_secs*1000, ptnTV_secs*1000, ptnTV_secs*200)!=ErrorCode::OBJECT_NOT_CHANGED)
         {
             ESP_LOGI(TAG, "SetKpTnTv to %F %F %F", ptnKP, ptnTN_secs, ptnTV_secs);
         }
@@ -607,7 +612,10 @@ ErrorCode DeviceManager::Loop()
         hal->SetAnalogOutput(this->setpointVoltageOut);
     }
     else if(experimentMode==ExperimentMode::closedloop_airspeed){
-        /*
+        /*File
+        if(airspeedReset){
+            airspeedPIDController->Reset();
+        }
         if(airspeedPIDController->GetMode()!=AUTOMATIC)
         {
             ESP_LOGI(TAG, "airspeedPIDController->SetMode(AUTOMATIC);");
@@ -638,9 +646,10 @@ ErrorCode DeviceManager::Loop()
     return ErrorCode::OK;
 }
 
-ErrorCode DeviceManager::TriggerHeaterExperimentClosedLoop(float setpointTemperature, float setpointFan, float KP, float TN, float TV, HeaterExperimentData *data){
+ErrorCode DeviceManager::TriggerHeaterExperimentClosedLoop(float setpointTemperature, float setpointFan, float KP, float TN, float TV, bool reset, HeaterExperimentData *data){
     //Trigger
     this->lastExperimentTrigger=hal->GetMillis();
+    this->heaterReset=reset;
     this->experimentMode=ExperimentMode::closedloop_heater;
     //New Setpoints
     this->setpointTemperature=setpointTemperature;
@@ -680,9 +689,10 @@ ErrorCode DeviceManager::TriggerHeaterExperimentFunctionblock(HeaterExperimentDa
     data->SetpointTemperature=0;
     return ErrorCode::OK;
 }
-ErrorCode DeviceManager::TriggerPtnExperimentClosedLoop(float setpoint, float KP, float TN, float TV, float **data){
+ErrorCode DeviceManager::TriggerPtnExperimentClosedLoop(float setpoint, float KP, float TN, float TV, bool reset, float **data){
     //Trigger
     this->lastExperimentTrigger=hal->GetMillis();
+    this->ptnReset=reset;
     this->experimentMode=ExperimentMode::closedloop_ptn;
     //New Setpoints
     this->setpointPtn=setpoint;
@@ -712,9 +722,10 @@ ErrorCode DeviceManager::TriggerPtnExperimentFunctionblock(float **data){
     hal->GetAnalogInputs(data);
     return ErrorCode::OK;
 }
-ErrorCode DeviceManager::TriggerAirspeedExperimentClosedLoop(float setpointAirspeed, float setpointServo1, float KP, float TN, float TV, AirspeedExperimentData *data){
+ErrorCode DeviceManager::TriggerAirspeedExperimentClosedLoop(float setpointAirspeed, float setpointServo1, float KP, float TN, float TV, bool reset, AirspeedExperimentData *data){
     //Trigger
     this->lastExperimentTrigger=hal->GetMillis();
+    this->airspeedReset=reset;
     this->experimentMode=ExperimentMode::closedloop_airspeed;
     //New Setpoints
     this->setpointAirspeed=setpointAirspeed;

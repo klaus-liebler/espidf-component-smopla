@@ -256,6 +256,7 @@ esp_err_t handle_put_ptnexperiment(httpd_req_t *req)
     float KP = bufF32[3];
     float TN = bufF32[4];
     float TV = bufF32[5];
+    bool reset = bufU32[6]!=0;
     
     ESP_LOGI(TAG, "Set mode %d and setpoint %4.1f ", modeU32, setpoint);
     float* voltages;
@@ -263,7 +264,7 @@ esp_err_t handle_put_ptnexperiment(httpd_req_t *req)
     {
     case 0: devicemanager->TriggerPtnExperimentFunctionblock(&voltages); break;
     case 1: devicemanager->TriggerPtnExperimentOpenLoop(setpoint, &voltages); break;
-    case 2: devicemanager->TriggerPtnExperimentClosedLoop(setpoint,  KP, TN, TV, &voltages); break;
+    case 2: devicemanager->TriggerPtnExperimentClosedLoop(setpoint,  KP, TN, TV, reset, &voltages); break;
     default:break;
     }
     
@@ -335,6 +336,7 @@ esp_err_t handle_put_heaterexperiment(httpd_req_t *req)
     float KP = bufF32[3];
     float TN = bufF32[4];
     float TV = bufF32[5];
+    bool reset = bufU32[6]!=0;
     
     ESP_LOGI(TAG, "Set mode %d and setpointTempOrHeater %F and Setpoint Fan %F", modeU32, setpointTempOrHeater, setpointFan);
     HeaterExperimentData returnData;
@@ -342,7 +344,7 @@ esp_err_t handle_put_heaterexperiment(httpd_req_t *req)
     {
     case 0: devicemanager->TriggerHeaterExperimentFunctionblock(&returnData); break;
     case 1: devicemanager->TriggerHeaterExperimentOpenLoop(setpointTempOrHeater, setpointFan, &returnData); break;
-    case 2: devicemanager->TriggerHeaterExperimentClosedLoop(setpointTempOrHeater, setpointFan, KP, TN, TV, &returnData); break;
+    case 2: devicemanager->TriggerHeaterExperimentClosedLoop(setpointTempOrHeater, setpointFan, KP, TN, TV, reset, &returnData); break;
     default:break;
     }
     
@@ -385,14 +387,14 @@ esp_err_t handle_put_airspeedexperiment(httpd_req_t *req){
     float KP = bufF32[3];
     float TN = bufF32[4];
     float TV = bufF32[5];
-    
+    bool reset = bufU32[6]!=0;
     ESP_LOGI(TAG, "Set mode %d and setpointTorH %F and Setpoint Fan %F", modeU32, setpointTempOrHeater, setpointFan);
     AirspeedExperimentData returnData;
     switch (modeU32)
     {
     case 0: devicemanager->TriggerAirspeedExperimentFunctionblock(&returnData); break;
     case 1: devicemanager->TriggerAirspeedExperimentOpenLoop(setpointTempOrHeater, setpointFan, &returnData); break;
-    case 2: devicemanager->TriggerAirspeedExperimentClosedLoop(setpointTempOrHeater, setpointFan, KP, TN, TV, &returnData); break;
+    case 2: devicemanager->TriggerAirspeedExperimentClosedLoop(setpointTempOrHeater, setpointFan, KP, TN, TV, reset, &returnData); break;
     default:break;
     }
     

@@ -20,7 +20,6 @@
 #include <errorcodes.hh>
 #include <rgbled.hh>
 #include <bh1750.hh>
-#include <ms4525.hh>
 #include <bme280.hh>
 #include <ads1115.hh>
 #include <ccs811.hh>
@@ -337,7 +336,7 @@ private:
             ds18b20_use_crc(ds18b20_info, true);                             // enable CRC check on all reads
             ds18b20_set_resolution(ds18b20_info, DS18B20_RESOLUTION_12_BIT); 
             ds18b20_convert_all(owb);
-            nextOneWireReadout = GetMillis() + oneWireReadoutIntervalMs;
+            nextOneWireReadout = GetMillis64() + oneWireReadoutIntervalMs;
             ESP_LOGI(TAG, "OneWire: DS18B20 successfully initialized.");
         }
         else
@@ -352,7 +351,7 @@ private:
             bme280->TriggerNextMeasurement();
             bme280ReadoutIntervalMs += 20;
             bme280->TriggerNextMeasurement();
-            nextBME280Readout = GetMillis() + bme280ReadoutIntervalMs;
+            nextBME280Readout = GetMillis64() + bme280ReadoutIntervalMs;
             ESP_LOGI(TAG, "I2C: BME280 successfully initialized.");
         }
         else
@@ -365,7 +364,7 @@ private:
         if (bh1750->Init(BH1750_OPERATIONMODE::CONTINU_H_RESOLUTION) == ESP_OK)
         {
             bh1750ReadoutIntervalMs = 200;
-            nextBH1750Readout = GetMillis() + bh1750ReadoutIntervalMs;
+            nextBH1750Readout = GetMillis64() + bh1750ReadoutIntervalMs;
             ESP_LOGI(TAG, "I2C: BH1750 successfully initialized.");
         }
         else
