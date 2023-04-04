@@ -1,5 +1,6 @@
 #pragma once
 #define I2S_ACTIVE
+#define ADC_LEGACY
 
 #include "HAL.hh"
 
@@ -11,11 +12,15 @@
 
 #include <driver/mcpwm.h>
 #include <driver/ledc.h>
+#ifdef ADC_LEGACY
 #include <driver/adc.h>
+#include <esp_adc_cal.h>
+#else
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+#endif
 #include <driver/i2c.h>
-#include <driver/rmt.h>
-
-#include <arduinoFFT.h>
 
 #include <errorcodes.hh>
 #include <rgbled.hh>
@@ -25,12 +30,10 @@
 #include <ccs811.hh>
 #include <hdc1080.hh>
 #include <aht_sensor.hh>
-#include <owb.h>
-#include <owb_rmt.h>
-#include <ds18b20.h>
+
+#include <onewire_bus.hh>
 #include <rotenc.hh>
 #ifdef I2S_ACTIVE
-#include <driver/i2s.h>
 #include <MP3Player.hh>
 #endif
 #include <PD_UFP.h>
@@ -79,14 +82,20 @@ constexpr Pintype PIN_MULTI1 = (Pintype)27;
 constexpr Pintype PIN_K3_ON = (Pintype)32;
 constexpr Pintype PIN_MULTI3 = (Pintype)33;
 constexpr Pintype PIN_ANALOGIN_OR_ROTB = (Pintype)34;//
-constexpr adc1_channel_t CHANNEL_ANALOGIN_OR_ROTB{ADC1_CHANNEL_6};
 //36=VP, 39=VN
 constexpr Pintype PIN_MOVEMENT_OR_FAN1SENSE = (Pintype)35;
 constexpr Pintype PIN_SW = (Pintype)36;
-constexpr adc1_channel_t CHANNEL_SWITCHES{ADC1_CHANNEL_0};
 constexpr Pintype PIN_LDR_OR_ROTA = (Pintype)39;
-constexpr adc1_channel_t CHANNEL_LDR_OR_ROTA{ADC1_CHANNEL_3};
 
+#ifdef ADC_LEGACY
+constexpr adc1_channel_t CHANNEL_ANALOGIN_OR_ROTB{ADC1_CHANNEL_6};
+constexpr adc1_channel_t CHANNEL_SWITCHES{ADC1_CHANNEL_0};
+constexpr adc1_channel_t CHANNEL_LDR_OR_ROTA{ADC1_CHANNEL_3};
+#else
+constexpr adc_channel_t CHANNEL_ANALOGIN_OR_ROTB{ADC_CHANNEL_6};
+constexpr adc_channel_t CHANNEL_SWITCHES{ADC_CHANNEL_0};
+constexpr adc_channel_t CHANNEL_LDR_OR_ROTA{ADC_CHANNEL_3};
+#endif
 
 constexpr Pintype PIN_485_DI = PIN_MULTI1;
 constexpr Pintype PIN_EXT1 = PIN_MULTI1;
@@ -141,8 +150,6 @@ enum class Button : uint8_t
 };
 constexpr size_t ANALOG_INPUTS_LEN{4};
 constexpr size_t LED_NUMBER{4};
-constexpr rmt_channel_t CHANNEL_ONEWIRE_TX{RMT_CHANNEL_1};
-constexpr rmt_channel_t CHANNEL_ONEWIRE_RX{RMT_CHANNEL_2};
 constexpr i2c_port_t I2C_PORT{I2C_NUM_1};
 constexpr uint32_t DEFAULT_VREF{1100}; //Use adc2_vref_to_gpio() to obtain a better estimate
 constexpr uint16_t sw_limits[]{160, 480, 1175, 1762, 2346, 2779, 3202};
@@ -201,8 +208,12 @@ private:
     MODE_HEATER_OR_LED_POWER mode_HEATER_OR_LED_POWER{MODE_HEATER_OR_LED_POWER::HEATER};//Heater mit 1Hz, LED mit 300Hz
     MODE_FAN1_OR_SERVO1 mode_FAN1_OR_SERVO1{MODE_FAN1_OR_SERVO1::SERVO1};
     //various
+#ifdef ADC_LEGACY
     esp_adc_cal_characteristics_t *adc_chars{nullptr};
-    
+#else
+    adc_oneshot_unit_handle_t adc1_handle;
+    adc_cali_handle_t adc1_cali_handle{nullptr};
+#endif
     //management objects
     RGBLED<LED_NUMBER, DeviceType::WS2812> *strip{nullptr};
     cRotaryEncoder *rotenc{nullptr};
@@ -244,7 +255,7 @@ private:
         if(MD8002_ACTIVE){
             mp3player.InitInternalDACMonoRightPin25();
         }else if(NS4168_ACTIVE){
-            mp3player.InitExternalI2SDAC(I2S_PORT_LOUDSPEAKER, PIN_NS4168_SCK, PIN_NS4168_WS, PIN_NS4168_SDAT);
+            mp3player.InitExternalI2SDAC(PIN_NS4168_SCK, PIN_NS4168_WS, PIN_NS4168_SDAT);
         }
         
         while(true){
@@ -275,7 +286,7 @@ private:
     }
 
     void readBinaryAndAnalogIOs(){
-        
+#ifdef ADC_LEGACY
         int adc_reading = adc1_get_raw(CHANNEL_SWITCHES);
         //uint32_t voltage = esp_adc_cal_raw_to_voltage(adc_reading, adc_chars);
         //printf("Raw: %d\tVoltage: %dmV\n", adc_reading, voltage);
@@ -297,7 +308,38 @@ private:
         this->AnalogInputs[0] = 11*esp_adc_cal_raw_to_voltage(analogIn, adc_chars);//die Multiplikation mit 11 wegen dem Spannungsteiler
         int ldrIn = adc1_get_raw(CHANNEL_LDR_OR_ROTA);
         this->ambientBrightnessLux_analog = esp_adc_cal_raw_to_voltage(ldrIn, adc_chars);//TODO Messkurce erstellen
+#else
+        int adc_reading;
+        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, CHANNEL_SWITCHES, &adc_reading));
         
+        //uint32_t voltage = esp_adc_cal_raw_to_voltage(adc_reading, adc_chars);
+        //printf("Raw: %d\tVoltage: %dmV\n", adc_reading, voltage);
+        int i = 0;
+        for (i = 0; i < sizeof(sw_limits) / sizeof(uint16_t); i++)
+        {
+            if (adc_reading < sw_limits[i])
+                break;
+        }
+        i = ~i;
+        this->buttonState = i;
+
+        //wifi_ap_record_t ap_info;
+        //esp_wifi_sta_get_ap_info(&ap_info);//TODO may only be called, when ESP32 is connected...
+        //this->wifiRssiDb=ap_info.rssi;
+
+        //Es wird nicht unterschieden, ob der eingang "nur" zum Messen von analogen Spannung verwendet wird oder ob es sich um den Trigger-Eingang des Zeitrelais handelt. Im zweiten Fall muss einfach eine Zeitrelais-Schaltung basierend auf der Grenzüberschreitung des Analogen Messwertes in der Funktionsblock-Spache realisiert werden
+        int analogInRaw;
+        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, CHANNEL_ANALOGIN_OR_ROTB, &analogInRaw));
+        int analogInVoltage;
+        ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, analogInRaw, &analogInVoltage));
+        this->AnalogInputs[0]=11*analogInVoltage;//die Multiplikation mit 11 wegen dem Spannungsteiler
+        int ldrInRaw;
+        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, CHANNEL_LDR_OR_ROTA, &ldrInRaw));
+        int ldrInVoltage;
+        ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, ldrInRaw, &ldrInVoltage));
+
+        this->ambientBrightnessLux_analog = 1.2*ldrInVoltage;//TODO Messkurce erstellen
+#endif     
 
         if(mode_MOVEMENT_OR_FAN1SENSE == MODE_MOVEMENT_OR_FAN1SENSE::MOVEMENT_SENSOR){
             this->movementIsDetected = gpio_get_level(PIN_MOVEMENT_OR_FAN1SENSE);
@@ -322,27 +364,17 @@ private:
 
         
         //OneWire
-        DS18B20_Info *ds18b20_info = NULL;
-        owb_rmt_driver_info rmt_driver_info;
-        OneWireBus *owb = owb_rmt_initialize(&rmt_driver_info, PIN_ONEWIRE, CHANNEL_ONEWIRE_TX, CHANNEL_ONEWIRE_RX);
-        owb_use_crc(owb, true); // enable CRC check for ROM code
-        // Find all connected devices
-        OneWireBus_ROMCode rom_code;
-        owb_status status = owb_read_rom(owb, &rom_code);
-        if (status == OWB_STATUS_OK)
-        {
-            ds18b20_info = ds18b20_malloc();                                 // heap allocation
-            ds18b20_init_solo(ds18b20_info, owb);                            // only one device on bus
-            ds18b20_use_crc(ds18b20_info, true);                             // enable CRC check on all reads
-            ds18b20_set_resolution(ds18b20_info, DS18B20_RESOLUTION_12_BIT); 
-            ds18b20_convert_all(owb);
+        onewire::M* ds18b20 = new onewire::M();
+        ds18b20->Init(PIN_ONEWIRE);
+        ds18b20->ResetSearch();
+        if(ds18b20->SearchRom()!=ESP_OK){
+            ESP_LOGE(TAG, "OneWire: An error occurred searching ROM");
+        }else{
+            ds18b20->TriggerTemperatureConversion(nullptr);
             nextOneWireReadout = GetMillis64() + oneWireReadoutIntervalMs;
             ESP_LOGI(TAG, "OneWire: DS18B20 successfully initialized.");
         }
-        else
-        {
-            ESP_LOGE(TAG, "OneWire: An error occurred reading ROM code: %d", status);
-        }
+        
 
         //BME280
         BME280 *bme280 = new BME280(I2C_PORT, BME280_ADRESS::PRIM);
@@ -395,8 +427,8 @@ private:
 
             if (GetMillis64() > nextOneWireReadout)
             {
-                ds18b20_read_temp(ds18b20_info, &(this->heaterTemperatureDegCel));
-                ds18b20_convert_all(owb);
+                ds18b20->GetTemperature(nullptr, &(this->heaterTemperatureDegCel));
+                ds18b20->TriggerTemperatureConversion(nullptr);
                 nextOneWireReadout = GetMillis64() + oneWireReadoutIntervalMs;
             }
             if (GetMillis64() > nextBME280Readout)
@@ -460,7 +492,7 @@ public:
         GetCO2PPM(&co2); 
         float* analogVolt{nullptr};
         GetAnalogInputs(&analogVolt);  
-        ESP_LOGI(TAG, "Heap %6d  RED %d YEL %d GRN %d MOV %d ENC %d SOUND %d SUPPLY %4.1f BRGHT %4.1f HEAT %4.1f AIRT %4.1f AIRPRS %5.0f AIRHUM %3.0f CO2 %5.0f, ANALOGIN %4.1f",
+        ESP_LOGI(TAG, "Heap %6lu  RED %d YEL %d GRN %d MOV %d ENC %i SOUND %ld SUPPLY %4.1f BRGHT %4.1f HEAT %4.1f AIRT %4.1f AIRPRS %5.0f AIRHUM %3.0f CO2 %5.0f, ANALOGIN %4.1f",
                          heap,   red,   yel,   grn,   mov,   enc,   sound,    spply,      bright,     htrTemp,   airTemp,   airPres,     airHumid,     co2,       analogVolt[0]);
         return ErrorCode::OK;
     }
@@ -501,8 +533,8 @@ public:
         if (soundNumber >= sizeof(SOUNDS) / sizeof(uint8_t*))
             soundNumber = 0;
         this->sound=soundNumber;
-        mp3player.Play(SOUNDS[soundNumber], SONGS_LEN[soundNumber]);
-        ESP_LOGI(TAG, "Set Sound to %d", soundNumber);
+        mp3player.PlayMP3(SOUNDS[soundNumber], SONGS_LEN[soundNumber]);
+        ESP_LOGI(TAG, "Set Sound to %ld", soundNumber);
 #endif
         return ErrorCode::OK;
     }
@@ -667,12 +699,37 @@ public:
         */
 
         //Configure Analog (before Rotary Encoder!!!)
+#ifdef ADC_LEGACY
         adc_chars = (esp_adc_cal_characteristics_t *)calloc(1, sizeof(esp_adc_cal_characteristics_t));
         esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_0, ADC_WIDTH_BIT_12, DEFAULT_VREF, adc_chars);
         adc1_config_width(ADC_WIDTH_BIT_12);
         adc1_config_channel_atten(CHANNEL_SWITCHES, ADC_ATTEN_DB_0);
         adc1_config_channel_atten(CHANNEL_ANALOGIN_OR_ROTB, ADC_ATTEN_DB_11);
         adc1_config_channel_atten(CHANNEL_LDR_OR_ROTA, ADC_ATTEN_DB_11);
+#else
+
+        //-------------ADC1 Init---------------//
+        
+        adc_oneshot_unit_init_cfg_t init_config1 = {};
+        init_config1.unit_id = ADC_UNIT_1;
+        ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
+
+        //-------------ADC1 Config---------------//
+        adc_oneshot_chan_cfg_t config = {};
+        config.bitwidth = ADC_BITWIDTH_12;
+        config.atten = ADC_ATTEN_DB_0;
+        ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, CHANNEL_SWITCHES, &config));
+        config.atten = ADC_ATTEN_DB_11;
+        ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, CHANNEL_ANALOGIN_OR_ROTB, &config));
+        ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, CHANNEL_LDR_OR_ROTA, &config));    
+        //-------------ADC1 Calibration Init---------------//
+        ESP_LOGI(TAG, "calibration scheme version is %s", "Line Fitting");
+        adc_cali_line_fitting_config_t cali_config = {};
+        cali_config.unit_id = init_config1.unit_id;
+        cali_config.atten = ADC_ATTEN_DB_11;
+        cali_config.bitwidth = ADC_BITWIDTH_DEFAULT;
+        ESP_ERROR_CHECK(adc_cali_create_scheme_line_fitting(&cali_config, &this->adc1_cali_handle));
+#endif
 
         //Rotary Encoder Input
         rotenc=new cRotaryEncoder(PIN_LDR_OR_ROTA, PIN_ANALOGIN_OR_ROTB);

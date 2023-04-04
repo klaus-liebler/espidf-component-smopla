@@ -258,7 +258,7 @@ esp_err_t handle_put_ptnexperiment(httpd_req_t *req)
     float TV = bufF32[5];
     bool reset = bufU32[6]!=0;
     
-    ESP_LOGI(TAG, "Set mode %d and setpoint %4.1f ", modeU32, setpoint);
+    ESP_LOGI(TAG, "Set mode %lu and setpoint %4.1f ", modeU32, setpoint);
     float* voltages;
     switch (modeU32)
     {
@@ -338,7 +338,7 @@ esp_err_t handle_put_heaterexperiment(httpd_req_t *req)
     float TV = bufF32[5];
     bool reset = bufU32[6]!=0;
     
-    ESP_LOGI(TAG, "Set mode %d and setpointTempOrHeater %F and Setpoint Fan %F", modeU32, setpointTempOrHeater, setpointFan);
+    ESP_LOGI(TAG, "Set mode %lu and setpointTempOrHeater %F and Setpoint Fan %F", modeU32, setpointTempOrHeater, setpointFan);
     HeaterExperimentData returnData;
     switch (modeU32)
     {
@@ -388,7 +388,7 @@ esp_err_t handle_put_airspeedexperiment(httpd_req_t *req){
     float TN = bufF32[4];
     float TV = bufF32[5];
     bool reset = bufU32[6]!=0;
-    ESP_LOGI(TAG, "Set mode %d and setpointTorH %F and Setpoint Fan %F", modeU32, setpointTempOrHeater, setpointFan);
+    ESP_LOGI(TAG, "Set mode %lu and setpointTorH %F and Setpoint Fan %F", modeU32, setpointTempOrHeater, setpointFan);
     AirspeedExperimentData returnData;
     switch (modeU32)
     {

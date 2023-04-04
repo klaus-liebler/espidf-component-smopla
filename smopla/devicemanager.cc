@@ -252,7 +252,7 @@ ErrorCode DeviceManager::ParseNewExecutableAndEnqueue(const uint8_t  *buffer, si
     const uint32_t floatsCount = ctx->ReadU32();
     const uint32_t colorsCount = ctx->ReadU32();
     const uint32_t operatorsCount = ctx->ReadU32();
-    ESP_LOGI(TAG, "booleansCount = %d, integersCount = %d, floatsCount = %d, colorsCount = %d, operatorsCount = %d",booleansCount, integersCount, floatsCount, colorsCount, operatorsCount);
+    ESP_LOGI(TAG, "booleansCount = %lu, integersCount = %lu, floatsCount = %lu, colorsCount = %lu, operatorsCount = %lu",booleansCount, integersCount, floatsCount, colorsCount, operatorsCount);
     
     std::vector<FunctionBlock *> functionBlocks(operatorsCount);
 
@@ -340,7 +340,7 @@ ErrorCode DeviceManager::ParseNewExecutableAndEnqueue(const uint8_t  *buffer, si
 */
 //endregion Specials
         default:
-            ESP_LOGE(TAG, "Unknown Operator Type %d found!", operatorType);
+            ESP_LOGE(TAG, "Unknown Operator Type %lu found!", operatorType);
             return ErrorCode::INVALID_NEW_FBD;
         }
     }
@@ -800,7 +800,7 @@ ErrorCode DeviceManager::TriggerBorisUDP(uint8_t *requestU8, size_t requestLen, 
             }
             MessageOutputDataLabAtHome* output = (MessageOutputDataLabAtHome*)requestU8;
             
-            LOGD(TAG, "Got a MESSAGE_TYPE_OUTPUTDATA_LABATHOME with DutyFan1 %f RelayK3 %d LED0 %d", output->DutyFan1Percent, output->RelayK3, output->LED0);
+            LOGD(TAG, "Got a MESSAGE_TYPE_OUTPUTDATA_LABATHOME with DutyFan1 %f RelayK3 %d LED0 %lu", output->DutyFan1Percent, output->RelayK3, output->LED0);
            
 
             if(!std::isnan(output->AnalogOutputVolts)){
@@ -871,7 +871,7 @@ ErrorCode DeviceManager::TriggerBorisUDP(uint8_t *requestU8, size_t requestLen, 
             }
             MessageOutputDataPtnchen* output = (MessageOutputDataPtnchen*)requestU8;
             
-            LOGD(TAG, "Got a MESSAGE_TYPE_OUTPUTDATA_Ptnchen with Output %f LED0 %d", output->AnalogOutputVolts, output->LED0);
+            LOGD(TAG, "Got a MESSAGE_TYPE_OUTPUTDATA_Ptnchen with Output %f LED0 %lu", output->AnalogOutputVolts, output->LED0);
             if(!std::isnan(output->AnalogOutputVolts)){
                 hal->SetAnalogOutput(output->AnalogOutputVolts);
             }
