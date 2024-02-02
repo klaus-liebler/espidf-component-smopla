@@ -10,9 +10,13 @@
 
 #include <driver/mcpwm.h>
 #include <driver/ledc.h>
-#include <driver/adc.h>
+
+#include <esp_adc/adc_oneshot.h>
+#include <esp_adc/adc_cali.h>
+#include <esp_adc/adc_cali_scheme.h>
 #include <driver/i2c.h>
-#include <driver/rmt.h>
+#include <esp_check.h>
+#include <ds18b20.hh>
 
 #include <errorcodes.hh>
 #include <rgbled.hh>
@@ -22,13 +26,10 @@
 #include <ccs811.hh>
 #include <hdc1080.hh>
 #include <aht_sensor.hh>
-#include <owb.h>
-#include <owb_rmt.h>
-#include <ds18b20.h>
 #include <rotenc.hh>
+#include <AudioPlayer.hh>
+#include <codec_manager_internal_dac.hh>
 
-#include <driver/i2s.h>
-#include <MP3Player.hh>
 
 #include "winfactboris_messages.hh"
 
@@ -43,20 +44,20 @@ FLASH_FILE(positive_mp3)
 FLASH_FILE(siren_mp3)
 const uint8_t *SOUNDS[] = {nullptr, alarm_co2_mp3_start, alarm_temperature_mp3_start, nok_mp3_start, ok_mp3_start, ready_mp3_start, fanfare_mp3_start, negative_mp3_start, positive_mp3_start, siren_mp3_start};
 const size_t SONGS_LEN[] = {0, alarm_co2_mp3_size, alarm_temperature_mp3_size, nok_mp3_size, ok_mp3_size, ready_mp3_size, fanfare_mp3_size, negative_mp3_size, positive_mp3_size, siren_mp3_size};
-MP3::Player mp3player;
+
 
 typedef gpio_num_t Pintype;
 
-constexpr Pintype PIN_R3_1 = (Pintype)36;
+constexpr Pintype PIN_K3_1 = (Pintype)36;
 constexpr Pintype PIN_MOVEMENT = (Pintype)39;
 constexpr Pintype PIN_SW = (Pintype)34;
-constexpr adc1_channel_t CHANNEL_SWITCHES = ADC1_CHANNEL_6;
+constexpr adc_channel_t CHANNEL_SWITCHES = ADC_CHANNEL_6;
 constexpr Pintype PIN_ROTENC_A = (Pintype)35;
 constexpr Pintype PIN_FAN2_DRIVE = (Pintype)32;
 constexpr Pintype PIN_FAN1_SENSE = (Pintype)33;
 constexpr Pintype PIN_SERVO2 = (Pintype)33;
 constexpr Pintype PIN_SPEAKER = (Pintype)25;
-constexpr Pintype PIN_LED_STRIP = (Pintype)26;
+constexpr Pintype PIN_LED_WS2812 = (Pintype)26;
 
 constexpr Pintype PIN_MULTI1 = (Pintype)27;
 constexpr Pintype PIN_ONEWIRE = (Pintype)14;
@@ -73,7 +74,7 @@ constexpr Pintype PIN_HEATER = (Pintype)17;
 constexpr Pintype PIN_MULTI3 = (Pintype)16;
 constexpr Pintype PIN_MULTI2 = (Pintype)4;
 constexpr Pintype PIN_SPI_IO2 = (Pintype)0;
-constexpr Pintype PIN_R3_ON = (Pintype)2;
+constexpr Pintype PIN_K3_ON = (Pintype)2;
 constexpr Pintype PIN_ROTENC_B = (Pintype)15;
 
 constexpr Pintype PIN_SERVO1 = PIN_MULTI1;
@@ -122,8 +123,6 @@ enum class Button : uint8_t
 
 constexpr size_t ANALOG_INPUTS_LEN{0};
 constexpr size_t LED_NUMBER{8};
-constexpr rmt_channel_t CHANNEL_ONEWIRE_TX{RMT_CHANNEL_1};
-constexpr rmt_channel_t CHANNEL_ONEWIRE_RX{RMT_CHANNEL_2};
 constexpr i2c_port_t I2C_PORT{I2C_NUM_1};
 constexpr uint32_t DEFAULT_VREF{1100}; // Use adc2_vref_to_gpio() to obtain a better estimate
 constexpr uint16_t sw_limits[]{160, 480, 1175, 1762, 2346, 2779, 3202};
@@ -145,19 +144,19 @@ constexpr mcpwm_generator_t MCPWM_GEN_FAN1{MCPWM_GEN_A};
 constexpr mcpwm_io_signals_t MCPWM_IO_FAN2{MCPWM1B};
 constexpr mcpwm_generator_t MCPWM_GEN_FAN2{MCPWM_GEN_B};
 
-constexpr mcpwm_timer_t MCPWM_TIMER_HEATER_OR_LED_POWER{MCPWM_TIMER_2};
-constexpr mcpwm_io_signals_t MCPWM_IO_HEATER_OR_LED_POWER{MCPWM2A};
-constexpr mcpwm_generator_t MCPWM_GEN_HEATER_OR_LED_POWER{MCPWM_GEN_A};
+constexpr mcpwm_timer_t MCPWM_TIMER_HEATER{MCPWM_TIMER_2};
+constexpr mcpwm_io_signals_t MCPWM_IO_HEATER{MCPWM2A};
+constexpr mcpwm_generator_t MCPWM_GEN_HEATER{MCPWM_GEN_A};
 
 constexpr int FREQUENCY_HEATER{1}; // see https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/mcpwm.html#resolution
 constexpr int FREQUENCY_SERVO{50};
 constexpr int FREQUENCY_FAN{100};
 constexpr int FREQUENCY_LED{300};
 
-constexpr bool NS4168_ACTIVE{false};
-constexpr bool MD8002_ACTIVE{!NS4168_ACTIVE};
+constexpr i2s_port_t I2S_PORT_LOUDSPEAKER{I2S_NUM_0};//must be I2S_NUM_0, as only this hat access to internal DAC
 
-extern "C" void sensorTask(void *pvParameters);
+constexpr size_t ONEWIRE_MAX_DS18B20{2};
+
 
 class HAL_labathome : public HAL
 {
@@ -166,12 +165,14 @@ private:
     MODE_MULTI1_PIN mode_multi1;
     MODE_MULTI_2_3_PINS mode_multi23;
 
-    esp_adc_cal_characteristics_t *adc_chars{nullptr};
+    adc_oneshot_unit_handle_t adc1_handle;
+    adc_cali_handle_t adc1_cali_handle{nullptr};
 
     // management objects
-    RGBLED<LED_NUMBER, DeviceType::WS2812> *strip{nullptr};
+    RGBLED::M<LED_NUMBER, RGBLED::DeviceType::WS2812> *strip{nullptr};
     cRotaryEncoder *rotenc{nullptr};
     CCS811::M *ccs811dev{nullptr};
+    AudioPlayer::Player *mp3player;
 
     // SensorValues
     uint32_t buttonState{0}; // see Button-Enum for meaning of bits
@@ -200,26 +201,20 @@ private:
 
     void MP3Loop()
     {
-        // sizeof(MP3::Player);64byte
-        if (MD8002_ACTIVE)
-        {
-            mp3player.InitInternalDACMonoRightPin25();
-        }
-        else if (NS4168_ACTIVE)
-        {
-            //mp3player.InitExternalI2SDAC(I2S_PORT_LOUDSPEAKER, PIN_NS4168_SCK, PIN_NS4168_WS, PIN_NS4168_SDAT);
-        }
-
-        while (true)
-        {
-            mp3player.Loop();
+        CodecManager::InternalDacWithPotentiometer *codec = new CodecManager::InternalDacWithPotentiometer();
+        mp3player = new AudioPlayer::Player(codec);
+        mp3player->Init();
+        
+        while(true){
+            mp3player->Loop();
         }
     }
 
     void readBinaryAndAnalogIOs()
     {
 
-        int adc_reading = adc1_get_raw(CHANNEL_SWITCHES);
+        int adc_reading;
+        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, CHANNEL_SWITCHES, &adc_reading));
         // uint32_t voltage = esp_adc_cal_raw_to_voltage(adc_reading, adc_chars);
         // printf("Raw: %d\tVoltage: %dmV\n", adc_reading, voltage);
         int i = 0;
@@ -231,15 +226,6 @@ private:
         i = ~i;
         this->buttonState = i;
 
-        // wifi_ap_record_t ap_info;
-        // esp_wifi_sta_get_ap_info(&ap_info);//TODO may only be called, when ESP32 is connected...
-        // this->wifiRssiDb=ap_info.rssi;
-
-        // Es wird nicht unterschieden, ob der eingang "nur" zum Messen von analogen Spannung verwendet wird oder ob es sich um den Trigger-Eingang des Zeitrelais handelt. Im zweiten Fall muss einfach eine Zeitrelais-Schaltung basierend auf der Grenzüberschreitung des Analogen Messwertes in der Funktionsblock-Spache realisiert werden
-        int analogIn = 0;//adc1_get_raw(CHANNEL_ANALOGIN_OR_ROTB);
-        this->AnalogInputs[0] = 11 * esp_adc_cal_raw_to_voltage(analogIn, adc_chars); // die Multiplikation mit 11 wegen dem Spannungsteiler
-        int ldrIn = 0;//adc1_get_raw(CHANNEL_LDR_OR_ROTA);
-        this->ambientBrightnessLux_analog = esp_adc_cal_raw_to_voltage(ldrIn, adc_chars); // TODO Messkurce erstellen
         this->movementIsDetected = gpio_get_level(PIN_MOVEMENT);    
     }
 
@@ -255,26 +241,48 @@ private:
         uint32_t bh1750ReadoutIntervalMs{200};
 
         // OneWire
-        DS18B20_Info *ds18b20_info = NULL;
-        owb_rmt_driver_info rmt_driver_info;
-        OneWireBus *owb = owb_rmt_initialize(&rmt_driver_info, PIN_ONEWIRE, CHANNEL_ONEWIRE_TX, CHANNEL_ONEWIRE_RX);
-        owb_use_crc(owb, true); // enable CRC check for ROM code
-        // Find all connected devices
-        OneWireBus_ROMCode rom_code;
-        owb_status status = owb_read_rom(owb, &rom_code);
-        if (status == OWB_STATUS_OK)
-        {
-            ds18b20_info = ds18b20_malloc();      // heap allocation
-            ds18b20_init_solo(ds18b20_info, owb); // only one device on bus
-            ds18b20_use_crc(ds18b20_info, true);  // enable CRC check on all reads
-            ds18b20_set_resolution(ds18b20_info, DS18B20_RESOLUTION_12_BIT);
-            ds18b20_convert_all(owb);
-            nextOneWireReadout = GetMillis() + oneWireReadoutIntervalMs;
-            ESP_LOGI(TAG, "OneWire: DS18B20 successfully initialized.");
+        onewire_bus_handle_t bus{nullptr};
+        onewire_bus_config_t bus_config = {};
+        bus_config.bus_gpio_num = PIN_ONEWIRE;
+        onewire_bus_rmt_config_t rmt_config = {};
+        rmt_config.max_rx_bytes = 10; // 1byte ROM command + 8byte ROM number + 1byte device command
+        ESP_ERROR_CHECK(onewire_new_bus_rmt(&bus_config, &rmt_config, &bus));
+        ESP_LOGI(TAG, "1-Wire bus installed on GPIO%d", PIN_ONEWIRE);
+        assert(bus);
+
+        int ds18b20_device_num = 0;
+        DS18B20* ds18b20s[ONEWIRE_MAX_DS18B20];
+        onewire_device_iter_handle_t iter = nullptr;
+        onewire_device_t next_onewire_device;
+        esp_err_t search_result = ESP_OK;
+        assert(&iter);
+        // create 1-wire device iterator, which is used for device search
+        ESP_ERROR_CHECK(onewire_new_device_iter(bus, &iter));
+        ESP_LOGI(TAG, "Device iterator created, start searching...");
+        while(true){
+            search_result = onewire_device_iter_get_next(iter, &next_onewire_device);
+            if (search_result != ESP_OK) {
+                break;
+            } 
+            // found a new device, let's check if we can upgrade it to a DS18B20
+            DS18B20* device= DS18B20::BuildFromOnewireDevice(&next_onewire_device);
+            if (!device) {
+                ESP_LOGI(TAG, "Found an unknown device, address: %016llX", next_onewire_device.address);
+                continue;
+            }
+            ESP_LOGI(TAG, "Found a DS18B20[%d], address: %016llX", ds18b20_device_num, next_onewire_device.address);
+            ds18b20s[ds18b20_device_num++]=device;
+            if (ds18b20_device_num >= ONEWIRE_MAX_DS18B20) {
+                ESP_LOGI(TAG, "Max DS18B20 number reached, stop searching...");
+                break;
+            }
         }
-        else
-        {
-            ESP_LOGE(TAG, "OneWire: An error occurred reading ROM code: %d", status);
+        ESP_ERROR_CHECK(onewire_del_device_iter(iter));
+        ESP_LOGI(TAG, "Searching done, %d DS18B20 device(s) found", ds18b20_device_num);
+
+        for (int i = 0; i < ds18b20_device_num; i++) {
+            ds18b20s[i]->TriggerTemperatureConversion();
+            nextOneWireReadout = GetMillis64() + oneWireReadoutIntervalMs;
         }
 
         // BME280
@@ -314,7 +322,7 @@ private:
             {
                 readBinaryAndAnalogIOs();
                 nextBinaryAndAnalogReadout = GetMillis64() + 100;
-                if (!mp3player.IsEmittingSamples())
+                if (!mp3player->IsEmittingSamples())
                 {
                     this->sound = 0;
                 }
@@ -322,8 +330,8 @@ private:
 
             if (GetMillis64() > nextOneWireReadout)
             {
-                ds18b20_read_temp(ds18b20_info, &(this->heaterTemperatureDegCel));
-                ds18b20_convert_all(owb);
+                ds18b20s[0]->GetTemperature(&(this->heaterTemperatureDegCel));
+                ds18b20s[0]->TriggerTemperatureConversion();
                 nextOneWireReadout = GetMillis64() + oneWireReadoutIntervalMs;
             }
             if (GetMillis64() > nextBME280Readout)
@@ -355,11 +363,10 @@ public:
     {
     }
 
-    ErrorCode OutputOneLineStatus() override
-    {
+    ErrorCode OutputOneLineStatus() override{
         uint32_t heap = esp_get_free_heap_size();
-        bool red = GetButtonRedIsPressed();
-        bool yel = GetButtonEncoderIsPressed();
+        bool red=GetButtonRedIsPressed();
+        bool yel=GetButtonEncoderIsPressed();
         bool grn = GetButtonGreenIsPressed();
         bool mov = IsMovementDetected();
         float htrTemp{0.f};
@@ -380,11 +387,11 @@ public:
         GetAirPressure(&airPres);
         float airHumid{0.f};
         GetAirRelHumidity(&airHumid);
-        GetCO2PPM(&co2);
-        float *analogVolt{nullptr};
-        GetAnalogInputs(&analogVolt);
-        ESP_LOGI(TAG, "Heap %6d  RED %d YEL %d GRN %d MOV %d ENC %d SOUND %d SUPPLY %4.1f BRGHT %4.1f HEAT %4.1f AIRT %4.1f AIRPRS %5.0f AIRHUM %3.0f CO2 %5.0f, ANALOGIN %4.1f",
-                 heap, red, yel, grn, mov, enc, sound, spply, bright, htrTemp, airTemp, airPres, airHumid, co2, analogVolt[0]);
+        GetCO2PPM(&co2); 
+        float* analogVolt{nullptr};
+        GetAnalogInputs(&analogVolt);  
+        ESP_LOGI(TAG, "Heap %6lu  RED %d YEL %d GRN %d MOV %d ENC %i SOUND %ld SUPPLY %4.1f BRGHT %4.1f HEAT %4.1f AIRT %4.1f AIRPRS %5.0f AIRHUM %3.0f CO2 %5.0f, ANALOGIN %4.1f",
+                         heap,   red,   yel,   grn,   mov,   enc,   sound,    spply,      bright,     htrTemp,   airTemp,   airPres,     airHumid,     co2,       analogVolt[0]);
         return ErrorCode::OK;
     }
 
@@ -416,7 +423,11 @@ public:
 
     ErrorCode GetEncoderValue(int *value)
     {
-        return this->rotenc->GetValue(value) == ESP_OK ? ErrorCode::OK : ErrorCode::GENERIC_ERROR;
+        bool isPressed;
+        int16_t val;
+        ErrorCode err = this->rotenc->GetValue(val, isPressed)==ESP_OK?ErrorCode::OK:ErrorCode::GENERIC_ERROR;
+        *value=val;
+        return err;
     }
 
     ErrorCode GetFan1Rpm(float *rpm)
@@ -427,13 +438,12 @@ public:
 
     ErrorCode SetSound(int32_t soundNumber)
     {
-
-        if (soundNumber >= sizeof(SOUNDS) / sizeof(uint8_t *))
+        if (soundNumber<0  || soundNumber >= sizeof(SOUNDS) / sizeof(uint8_t*)){
             soundNumber = 0;
-        this->sound = soundNumber;
-        mp3player.Play(SOUNDS[soundNumber], SONGS_LEN[soundNumber]);
-        ESP_LOGI(TAG, "Set Sound to %d", soundNumber);
-
+        }
+        this->sound=soundNumber;
+        mp3player->PlayMP3(SOUNDS[soundNumber], SONGS_LEN[soundNumber], 255, true);
+        ESP_LOGI(TAG, "Set Sound to %ld", soundNumber);
         return ErrorCode::OK;
     }
 
@@ -500,7 +510,7 @@ public:
 
     ErrorCode SetAnalogOutput(float volts)
     {
-        mp3player.OutputConstantVoltage(volts);
+        //mp3player.OutputConstantVoltage(volts);
         return ErrorCode::OK;
     }
 
@@ -539,33 +549,52 @@ public:
         i2s_driver_install(I2S_PORT_MICROPHONE, &i2sMemsConfigLeftChannel, 0, NULL);
         i2s_set_pin(I2S_PORT_MICROPHONE, &i2sPins);
         */
-        gpio_reset_pin(PIN_R3_1);
-        gpio_set_direction(PIN_R3_1, GPIO_MODE_INPUT);
-        gpio_set_pull_mode(PIN_R3_1, GPIO_FLOATING);
 
+        //-------------ADC1 Init---------------//
+        adc_oneshot_unit_init_cfg_t init_config1 = {};
+        init_config1.unit_id = ADC_UNIT_1;
+        ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
+
+        //-------------ADC1 Config---------------//
+        adc_oneshot_chan_cfg_t config = {};
+        config.bitwidth = ADC_BITWIDTH_12;
+        config.atten = ADC_ATTEN_DB_0;
+        ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, CHANNEL_SWITCHES, &config));
+        //config.atten = ADC_ATTEN_DB_11;
+        //ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, CHANNEL_ANALOGIN_OR_ROTB, &config));
+        //ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, CHANNEL_LDR_OR_ROTA, &config));    
+        //-------------ADC1 Calibration Init---------------//
+        ESP_LOGI(TAG, "calibration scheme version is %s", "Line Fitting");
+        adc_cali_line_fitting_config_t cali_config = {};
+        cali_config.unit_id = init_config1.unit_id;
+        cali_config.atten = ADC_ATTEN_DB_11;
+        cali_config.bitwidth = ADC_BITWIDTH_DEFAULT;
+        ESP_ERROR_CHECK(adc_cali_create_scheme_line_fitting(&cali_config, &this->adc1_cali_handle));
+        
+        
+
+
+        //Movement Sensor
         gpio_reset_pin(PIN_MOVEMENT);
         gpio_set_direction(PIN_MOVEMENT, GPIO_MODE_INPUT);
         gpio_set_pull_mode(PIN_MOVEMENT, GPIO_FLOATING);
 
-        adc_chars = (esp_adc_cal_characteristics_t *)calloc(1, sizeof(esp_adc_cal_characteristics_t));
-        esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_0db, ADC_WIDTH_BIT_12, DEFAULT_VREF, adc_chars);
-        adc1_config_width(ADC_WIDTH_BIT_12);
-        adc1_config_channel_atten(CHANNEL_SWITCHES, ADC_ATTEN_0db);
 
-        gpio_reset_pin(PIN_ROTENC_A);
-        gpio_set_direction(PIN_ROTENC_A, GPIO_MODE_INPUT);
-        gpio_set_pull_mode(PIN_ROTENC_A, GPIO_FLOATING);
+        //Rotary Encoder Input
+        rotenc=new cRotaryEncoder(PIN_ROTENC_A, PIN_ROTENC_B, GPIO_NUM_NC);
+        ESP_ERROR_CHECK(rotenc->Init());
+        ESP_ERROR_CHECK(rotenc->Start());
 
-        gpio_reset_pin(PIN_ROTENC_B);
-        gpio_set_direction(PIN_ROTENC_B, GPIO_MODE_INPUT);
-        gpio_set_pull_mode(PIN_ROTENC_B, GPIO_PULLUP_ONLY);
+        //Relay input
+        gpio_set_direction(PIN_K3_1, GPIO_MODE_INPUT);
+        gpio_set_pull_mode(PIN_K3_1, GPIO_FLOATING);
 
-        gpio_set_level(PIN_R3_ON, 0);
-        gpio_reset_pin(PIN_R3_ON);
-        gpio_set_direction(PIN_R3_ON, GPIO_MODE_OUTPUT);
-        gpio_set_pull_mode(PIN_R3_ON, GPIO_FLOATING);
+        //Relay K3 output
+        gpio_set_level(PIN_K3_ON, 0);
+        gpio_set_direction(PIN_K3_ON, GPIO_MODE_OUTPUT);
 
         // Servos
+        ESP_ERROR_CHECK(mcpwm_group_set_resolution(MCPWM_UNIT_0, 1000000));
         if (mode_multi1 == MODE_MULTI1_PIN::SERVO1)
         {
             mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0A, PIN_SERVO1);
@@ -574,67 +603,34 @@ public:
         {
             mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0B, PIN_SERVO2);
         }
+        ESP_ERROR_CHECK(mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM_IO_SERVO2, PIN_SERVO2));       
+        ESP_ERROR_CHECK(mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM_IO_FAN2,   PIN_FAN2_DRIVE));
+        ESP_ERROR_CHECK(mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM_IO_HEATER, PIN_HEATER));
+        ESP_ERROR_CHECK(mcpwm_timer_set_resolution(MCPWM_UNIT_0, MCPWM_TIMER_HEATER, 10000));
+
+        //MCPWM base config
         mcpwm_config_t pwm_config;
-        pwm_config.frequency = 50; // frequency = 50Hz, i.e. for every servo motor time period should be 20ms
-        pwm_config.cmpr_a = 0;     // duty cycle of PWMxA = 0
-        pwm_config.cmpr_b = 0;     // duty cycle of PWMxb = 0
+        pwm_config.cmpr_a = 0;     //duty cycle of PWMxA = 0
+        pwm_config.cmpr_b = 0;     //duty cycle of PWMxb = 0
         pwm_config.counter_mode = MCPWM_UP_COUNTER;
         pwm_config.duty_mode = MCPWM_DUTY_MODE_0;
-        ESP_ERROR_CHECK(mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_0, &pwm_config)); // Configure PWM0A & PWM0B with above settings
 
-        // Fans
-        mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM1A, PIN_FAN1_DRIVE);
-        mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM1B, PIN_FAN2_DRIVE);
-        pwm_config.frequency = 50;
-        pwm_config.cmpr_a = 0; // duty cycle of PWMxA = 0
-        pwm_config.cmpr_b = 0; // duty cycle of PWMxb = 0
-        pwm_config.counter_mode = MCPWM_UP_COUNTER;
-        pwm_config.duty_mode = MCPWM_DUTY_MODE_0;
-        ESP_ERROR_CHECK(mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_1, &pwm_config));
-
-        // Heater
-        mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM2A, PIN_HEATER);
-        pwm_config.frequency = 20;
-        pwm_config.cmpr_a = 0; // duty cycle of PWMxA = 0
-        pwm_config.cmpr_b = 0; // duty cycle of PWMxb = 0
-        pwm_config.counter_mode = MCPWM_UP_COUNTER;
-        pwm_config.duty_mode = MCPWM_DUTY_MODE_0;
-        ESP_ERROR_CHECK(mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_2, &pwm_config));
-
-        // White Power LED
-        ledc_timer_config_t power_ledc_timer;
-        power_ledc_timer.duty_resolution = power_ledc_timer_duty_resolution; // resolution of PWM duty
-        power_ledc_timer.freq_hz = 500;                                      // frequency of PWM signal
-        power_ledc_timer.speed_mode = LEDC_HIGH_SPEED_MODE;                  // timer mode
-        power_ledc_timer.timer_num = LEDC_TIMER_0;                           // timer index
-        power_ledc_timer.clk_cfg = LEDC_AUTO_CLK;
-        ESP_ERROR_CHECK(ledc_timer_config(&power_ledc_timer));
-
-        ledc_channel_config_t ledc_channel;
-        ledc_channel.channel = LEDC_CHANNEL_0;
-        ledc_channel.duty = 0;
-        ledc_channel.gpio_num = PIN_LED_POWER_WHITE;
-        ledc_channel.speed_mode = LEDC_HIGH_SPEED_MODE;
-        ledc_channel.hpoint = 0;
-        ledc_channel.timer_sel = LEDC_TIMER_0;
-        ledc_channel.intr_type = LEDC_INTR_DISABLE;
-        ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
-
-
+        pwm_config.frequency = FREQUENCY_SERVO;
+        ESP_ERROR_CHECK(mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_SERVO, &pwm_config));
+        pwm_config.frequency = FREQUENCY_FAN;
+        ESP_ERROR_CHECK(mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_FAN, &pwm_config));
+        pwm_config.frequency = FREQUENCY_HEATER;
+        ESP_ERROR_CHECK(mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_HEATER, &pwm_config));
 
         //I2C Master
         ESP_ERROR_CHECK(I2C::Init(I2C_PORT, PIN_I2C_SCL, PIN_I2C_SDA));
 
         //LED Strip
-        strip = new RGBLED<LED_NUMBER, DeviceType::WS2812>();
-        ESP_ERROR_CHECK(strip->Init(VSPI_HOST, PIN_LED_STRIP, 2 ));
+        strip = new RGBLED::M<LED_NUMBER, RGBLED::DeviceType::WS2812>();
+        ESP_ERROR_CHECK(strip->Init(VSPI_HOST, PIN_LED_WS2812, 2 ));
         ESP_ERROR_CHECK(strip->Clear(100));
 
-        
-
-        rotenc = new cRotaryEncoder(PIN_ROTENC_A, PIN_ROTENC_B, -100, 100);
-        rotenc->Init();
-        rotenc->Start();
+        readBinaryAndAnalogIOs();//do this while init to avoid race condition (wifimanager is resettet when red and green buttons are pressed during startup)
 
         xTaskCreate(sensorTask, "sensorTask", 4096 * 4, this, 6, NULL);
         xTaskCreate(mp3Task, "mp3task", 6144 * 4, this, 16, nullptr); //Stack Size = 4096 --> Stack overflow!!
@@ -684,54 +680,72 @@ public:
 
     ErrorCode SetRelayState(bool state)
     {
-        gpio_set_level(PIN_R3_ON, state);
+        gpio_set_level(PIN_K3_ON, state);
         return ErrorCode::OK;
     }
 
     ErrorCode SetHeaterDuty(float dutyInPercent)
     {
-        if(this->heaterEmergencyShutdown) return ErrorCode::EMERGENCY_SHUTDOWN;
-        mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_2, MCPWM_OPR_A, dutyInPercent);
+        if(this->heaterEmergencyShutdown){
+            ESP_ERROR_CHECK(mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_HEATER, MCPWM_GEN_HEATER, 0));
+            return ErrorCode::EMERGENCY_SHUTDOWN;
+        }
+        dutyInPercent=std::max(0.0f, dutyInPercent);
+        dutyInPercent=std::min(100.0f, dutyInPercent);
+        mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_HEATER, MCPWM_GEN_HEATER, dutyInPercent);
         return ErrorCode::OK;
     }
 
     float GetHeaterState()
     {
-        return mcpwm_get_duty(MCPWM_UNIT_0, MCPWM_TIMER_2, MCPWM_OPR_A);
+        return mcpwm_get_duty(MCPWM_UNIT_0, MCPWM_TIMER_HEATER, MCPWM_GEN_HEATER);
+    }
+
+    ErrorCode SetServo1Position(float angle_0_to_180)
+    {
+        uint32_t cal_pulsewidth = (SERVO_MIN_PULSEWIDTH + (((SERVO_MAX_PULSEWIDTH - SERVO_MIN_PULSEWIDTH) * (angle_0_to_180)) / (SERVO_MAX_DEGREE)));
+        esp_err_t err =  mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, cal_pulsewidth);
+        return err==ESP_OK?ErrorCode::OK:ErrorCode::GENERIC_ERROR;
+    }
+
+    ErrorCode SetServo2Position(float angle_0_to_180)
+    {
+        uint32_t cal_pulsewidth = (SERVO_MIN_PULSEWIDTH + (((SERVO_MAX_PULSEWIDTH - SERVO_MIN_PULSEWIDTH) * (angle_0_to_180)) / (SERVO_MAX_DEGREE)));
+        esp_err_t err =  mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B, cal_pulsewidth);
+        return err==ESP_OK?ErrorCode::OK:ErrorCode::GENERIC_ERROR;
     }
 
     ErrorCode SetFan1Duty(float dutyInPercent)
-    {
-        mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A, dutyInPercent);
+    {               
+
+        dutyInPercent=std::max(0.0f, dutyInPercent);
+        dutyInPercent=std::min(100.0f, dutyInPercent);
+        mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_FAN, MCPWM_GEN_FAN1, dutyInPercent);
         return ErrorCode::OK;
     }
 
     float GetFan1State()
     {
-        return mcpwm_get_duty(MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A);
+        return mcpwm_get_duty(MCPWM_UNIT_0, MCPWM_TIMER_FAN, MCPWM_GEN_FAN1);
     }
 
     ErrorCode SetFan2Duty(float dutyInPercent)
     {
-        mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_B, dutyInPercent);
+        mcpwm_set_duty(MCPWM_UNIT_0, MCPWM_TIMER_FAN, MCPWM_GEN_FAN2, dutyInPercent);
         return ErrorCode::OK;
     }
 
     float GetFan2State()
     {
-        return mcpwm_get_duty(MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_B);
+        return mcpwm_get_duty(MCPWM_UNIT_0, MCPWM_TIMER_FAN, MCPWM_GEN_FAN2);
     }
 
     ErrorCode SetLedPowerWhiteDuty(float dutyInpercent)
     {
-        if (dutyInpercent > 100)
-            dutyInpercent = 100;
-        uint32_t duty = (((2 ^ power_ledc_timer_duty_resolution) - 1) * dutyInpercent) / 100;
-        ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, duty);
-        ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
         return ErrorCode::OK;
     }
 
+    
     bool GetButtonRedIsPressed()
     {
         return GetBitIdx(this->buttonState, (uint8_t)Button::BUT_RED);
@@ -752,19 +766,6 @@ public:
         return this->movementIsDetected;
     }
 
-    ErrorCode SetServo1Position(float angle_0_to_180)
-    {
-        uint32_t cal_pulsewidth = (SERVO_MIN_PULSEWIDTH + (((SERVO_MAX_PULSEWIDTH - SERVO_MIN_PULSEWIDTH) * (angle_0_to_180)) / (SERVO_MAX_DEGREE)));
-        esp_err_t err =  mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, cal_pulsewidth);
-        return err==ESP_OK?ErrorCode::OK:ErrorCode::GENERIC_ERROR;
-    }
-
-    ErrorCode SetServo2Position(float angle_0_to_180)
-    {
-        uint32_t cal_pulsewidth = (SERVO_MIN_PULSEWIDTH + (((SERVO_MAX_PULSEWIDTH - SERVO_MIN_PULSEWIDTH) * (angle_0_to_180)) / (SERVO_MAX_DEGREE)));
-        esp_err_t err =  mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B, cal_pulsewidth);
-        return err==ESP_OK?ErrorCode::OK:ErrorCode::GENERIC_ERROR;
-    }
 
     float GetUSBCVoltage(){
         return 20.0;
@@ -790,7 +791,7 @@ public:
             AfterLoop();
             vTaskDelay(pdMS_TO_TICKS(150));
         }    
-        SetSound(5);
+        SetSound(1);
         UnColorizeAllLed();
         return ErrorCode::OK;
     }

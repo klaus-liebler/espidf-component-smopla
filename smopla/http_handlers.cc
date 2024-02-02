@@ -311,7 +311,7 @@ esp_err_t handle_put_heaterexperiment(httpd_req_t *req)
     DeviceManager *devicemanager = *static_cast<DeviceManager **>(req->user_ctx);
     int ret=0;
     int remaining = req->content_len;
-    if(remaining!=24){
+    if(remaining!=28){
         ESP_LOGE(TAG, "Unexpected Data length %d in handle_put_heaterexperiment", remaining);
         return ESP_FAIL;
     }

@@ -1,6 +1,4 @@
 #pragma once
-#define I2S_ACTIVE
-#define ADC_LEGACY
 
 #include "HAL.hh"
 
@@ -12,14 +10,10 @@
 
 #include <driver/mcpwm.h>
 #include <driver/ledc.h>
-#ifdef ADC_LEGACY
-#include <driver/adc.h>
-#include <esp_adc_cal.h>
-#else
+
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
-#endif
 #include <driver/i2c.h>
 
 #include <errorcodes.hh>
@@ -30,16 +24,14 @@
 #include <ccs811.hh>
 #include <hdc1080.hh>
 #include <aht_sensor.hh>
-
 #include <onewire_bus.hh>
 #include <rotenc.hh>
-#ifdef I2S_ACTIVE
-#include <MP3Player.hh>
-#endif
+#include <AudioPlayer.hh>
+
 #include <PD_UFP.h>
 
 #include "winfactboris_messages.hh"
-#ifdef I2S_ACTIVE
+
 FLASH_FILE(alarm_co2_mp3)
 FLASH_FILE(alarm_temperature_mp3)
 FLASH_FILE(nok_mp3)
@@ -53,12 +45,7 @@ const uint8_t *SOUNDS[]  = {nullptr, alarm_co2_mp3_start, alarm_temperature_mp3_
 const size_t SONGS_LEN[] = {0,       alarm_co2_mp3_size,  alarm_temperature_mp3_size,  nok_mp3_size,  ok_mp3_size,  ready_mp3_size,  fanfare_mp3_size,  negative_mp3_size,  positive_mp3_size,  siren_mp3_size};
 
 
-MP3::Player mp3player;
-#endif
-
 typedef gpio_num_t Pintype;
-
-
 constexpr Pintype PIN_SPI_IO2 = (Pintype)0;
 constexpr Pintype PIN_TXD0 = (Pintype)1;
 constexpr Pintype PIN_FAN2_DRIVE = (Pintype)2;
@@ -87,15 +74,9 @@ constexpr Pintype PIN_MOVEMENT_OR_FAN1SENSE = (Pintype)35;
 constexpr Pintype PIN_SW = (Pintype)36;
 constexpr Pintype PIN_LDR_OR_ROTA = (Pintype)39;
 
-#ifdef ADC_LEGACY
-constexpr adc1_channel_t CHANNEL_ANALOGIN_OR_ROTB{ADC1_CHANNEL_6};
-constexpr adc1_channel_t CHANNEL_SWITCHES{ADC1_CHANNEL_0};
-constexpr adc1_channel_t CHANNEL_LDR_OR_ROTA{ADC1_CHANNEL_3};
-#else
 constexpr adc_channel_t CHANNEL_ANALOGIN_OR_ROTB{ADC_CHANNEL_6};
 constexpr adc_channel_t CHANNEL_SWITCHES{ADC_CHANNEL_0};
 constexpr adc_channel_t CHANNEL_LDR_OR_ROTA{ADC_CHANNEL_3};
-#endif
 
 constexpr Pintype PIN_485_DI = PIN_MULTI1;
 constexpr Pintype PIN_EXT1 = PIN_MULTI1;
@@ -125,7 +106,6 @@ struct Note
 //- Nur RS485, kein Ext-Anschluss
 //- USB-IRQ blockiert SPI_CLK, Servo2 blockiert SPI_IO1
 
-
 enum class MODE_HEATER_OR_LED_POWER:uint8_t{
     HEATER=1,
     LED_POWER=2,
@@ -141,13 +121,13 @@ enum class MODE_FAN1_OR_SERVO1:uint8_t{
     SERVO1=2,
 };
 
-
 enum class Button : uint8_t
 {
     BUT_ENCODER = 1,
     BUT_RED = 0,
     BUT_GREEN = 2,
 };
+
 constexpr size_t ANALOG_INPUTS_LEN{4};
 constexpr size_t LED_NUMBER{4};
 constexpr i2c_port_t I2C_PORT{I2C_NUM_1};
@@ -179,10 +159,10 @@ constexpr int FREQUENCY_HEATER{1}; //see https://docs.espressif.com/projects/esp
 constexpr int FREQUENCY_SERVO{50};
 constexpr int FREQUENCY_FAN{100};
 constexpr int FREQUENCY_LED{300};
-#ifdef I2S_ACTIVE
-constexpr i2s_port_t I2S_PORT_MICROPHONE{I2S_NUM_1};
+
 constexpr i2s_port_t I2S_PORT_LOUDSPEAKER{I2S_NUM_0};//must be I2S_NUM_0, as only this hat access to internal DAC
-#endif
+constexpr i2s_port_t I2S_PORT_MICROPHONE{I2S_NUM_1};
+
 constexpr int average_over_N_measurements{10};
 constexpr int SAMPLES {2048};
 constexpr size_t SAMPLES_IN_BYTES{SAMPLES*4};
@@ -191,14 +171,10 @@ constexpr int AMPLITUDE{150};
 constexpr uint16_t FREQUENCIES[]{11,22,32,43,54,65,75,97,118,140,161,183,205,226,258,291,323,355,388,431,474,517,560,614,668,721,786,851,915,991,1066,1152,1238,1335,1443,1550,1669,1798,1938,2089,2239,2401,2584,2778,2982,3198,3435,3682,3951,4231,4533,4856,5200,5566,5965,6385,6837,7321,7838,8398,8990,9625,10304,11025};
 constexpr uint16_t BUCKET_INDICES[]{1,2,3,4,5,6,7,9,11,13,15,17,19,21,24,27,30,33,36,40,44,48,52,57,62,67,73,79,85,92,99,107,115,124,134,144,155,167,180,194,208,223,240,258,277,297,319,342,367,393,421,451,483,517,554,593,635,680,728,780,835,894,957,1024};
 
-
 //int32_t samplesI32[SAMPLES]; //The slave serial-data port’s format is I²S, 24-bit, twos complement, There must be 64 SCK cycles in each WS stereo frame, or 32 SCK cycles per data-word.
 //double real[SAMPLES];
 //double imag[SAMPLES];
 //arduinoFFT fft(real, imag, SAMPLES, SAMPLE_RATE_MICROPHONE);
-
-
-
 
 class HAL_Impl : public HAL
 {
@@ -207,16 +183,14 @@ private:
     MODE_MOVEMENT_OR_FAN1SENSE mode_MOVEMENT_OR_FAN1SENSE;
     MODE_HEATER_OR_LED_POWER mode_HEATER_OR_LED_POWER{MODE_HEATER_OR_LED_POWER::HEATER};//Heater mit 1Hz, LED mit 300Hz
     MODE_FAN1_OR_SERVO1 mode_FAN1_OR_SERVO1{MODE_FAN1_OR_SERVO1::SERVO1};
-    //various
-#ifdef ADC_LEGACY
-    esp_adc_cal_characteristics_t *adc_chars{nullptr};
-#else
+    
     adc_oneshot_unit_handle_t adc1_handle;
     adc_cali_handle_t adc1_cali_handle{nullptr};
-#endif
+
     //management objects
-    RGBLED<LED_NUMBER, DeviceType::WS2812> *strip{nullptr};
+    RGBLED::M<LED_NUMBER, RGBLED::DeviceType::WS2812> *strip{nullptr};
     cRotaryEncoder *rotenc{nullptr};
+    AudioPlayer::Player *mp3player;
     //pcnt_unit_handle_t speedmeter{nullptr};
     PD_UFP_core_c PD_UFP;//176byte
     hdc1080::M *hdc1080dev{nullptr};
@@ -241,28 +215,22 @@ private:
     //float analogInputVolt{std::numeric_limits<float>::quiet_NaN()};
     uint32_t sound{0};
     float fan1RotationsRpM{std::numeric_limits<float>::quiet_NaN()};
-
-    
     bool heaterEmergencyShutdown{false};
 
     float AnalogInputs[ANALOG_INPUTS_LEN]={0};
     
     uint16_t ds4525doPressure;
     
-#ifdef I2S_ACTIVE  
     void MP3Loop(){
-        //sizeof(MP3::Player);64byte
-        if(MD8002_ACTIVE){
-            mp3player.InitInternalDACMonoRightPin25();
-        }else if(NS4168_ACTIVE){
-            mp3player.InitExternalI2SDAC(PIN_NS4168_SCK, PIN_NS4168_WS, PIN_NS4168_SDAT);
-        }
+        CodecManager::InternalDacWithPotentiometer *codec = new CodecManager::InternalDacWithPotentiometer();
+        mp3player = new AudioPlayer::Player(codec);
+        mp3player->Init();
         
         while(true){
-            mp3player.Loop();
+            mp3player->Loop();
         }
     }
-#endif
+
     void USBPDLoop(){
         PD_UFP.init(PD_POWER_OPTION_MAX_20V);
         while(true){
@@ -286,29 +254,7 @@ private:
     }
 
     void readBinaryAndAnalogIOs(){
-#ifdef ADC_LEGACY
-        int adc_reading = adc1_get_raw(CHANNEL_SWITCHES);
-        //uint32_t voltage = esp_adc_cal_raw_to_voltage(adc_reading, adc_chars);
-        //printf("Raw: %d\tVoltage: %dmV\n", adc_reading, voltage);
-        int i = 0;
-        for (i = 0; i < sizeof(sw_limits) / sizeof(uint16_t); i++)
-        {
-            if (adc_reading < sw_limits[i])
-                break;
-        }
-        i = ~i;
-        this->buttonState = i;
 
-        //wifi_ap_record_t ap_info;
-        //esp_wifi_sta_get_ap_info(&ap_info);//TODO may only be called, when ESP32 is connected...
-        //this->wifiRssiDb=ap_info.rssi;
-
-        //Es wird nicht unterschieden, ob der eingang "nur" zum Messen von analogen Spannung verwendet wird oder ob es sich um den Trigger-Eingang des Zeitrelais handelt. Im zweiten Fall muss einfach eine Zeitrelais-Schaltung basierend auf der Grenzüberschreitung des Analogen Messwertes in der Funktionsblock-Spache realisiert werden
-        int analogIn = adc1_get_raw(CHANNEL_ANALOGIN_OR_ROTB);
-        this->AnalogInputs[0] = 11*esp_adc_cal_raw_to_voltage(analogIn, adc_chars);//die Multiplikation mit 11 wegen dem Spannungsteiler
-        int ldrIn = adc1_get_raw(CHANNEL_LDR_OR_ROTA);
-        this->ambientBrightnessLux_analog = esp_adc_cal_raw_to_voltage(ldrIn, adc_chars);//TODO Messkurce erstellen
-#else
         int adc_reading;
         ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, CHANNEL_SWITCHES, &adc_reading));
         
@@ -338,8 +284,7 @@ private:
         int ldrInVoltage;
         ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_handle, ldrInRaw, &ldrInVoltage));
 
-        this->ambientBrightnessLux_analog = 1.2*ldrInVoltage;//TODO Messkurce erstellen
-#endif     
+        this->ambientBrightnessLux_analog = 1.2*ldrInVoltage;//TODO Messkurce erstellen   
 
         if(mode_MOVEMENT_OR_FAN1SENSE == MODE_MOVEMENT_OR_FAN1SENSE::MOVEMENT_SENSOR){
             this->movementIsDetected = gpio_get_level(PIN_MOVEMENT_OR_FAN1SENSE);
@@ -418,11 +363,9 @@ private:
             if(GetMillis64() > nextBinaryAndAnalogReadout){
                 readBinaryAndAnalogIOs();
                 nextBinaryAndAnalogReadout = GetMillis64()+100;
-#ifdef I2S_ACTIVE
-                if(!mp3player.IsEmittingSamples()){
+                if(!mp3player->IsEmittingSamples()){
                     this->sound=0;
                 }
-#endif
             }
 
             if (GetMillis64() > nextOneWireReadout)
@@ -519,7 +462,11 @@ public:
     }
 
     ErrorCode GetEncoderValue(int *value){
-        return this->rotenc->GetValue(value)==ESP_OK?ErrorCode::OK:ErrorCode::GENERIC_ERROR;
+         bool isPressed;
+        int16_t val;
+        ErrorCode err = this->rotenc->GetValue(val, isPressed)==ESP_OK?ErrorCode::OK:ErrorCode::GENERIC_ERROR;
+        *value=val;
+        return err;
     }
 
     ErrorCode GetFan1Rpm(float* rpm){
@@ -529,13 +476,12 @@ public:
     
     ErrorCode SetSound(int32_t soundNumber)
     {
-#ifdef I2S_ACTIVE
-        if (soundNumber >= sizeof(SOUNDS) / sizeof(uint8_t*))
+        if (soundNumber<0  || soundNumber >= sizeof(SOUNDS) / sizeof(uint8_t*)){
             soundNumber = 0;
+        }
         this->sound=soundNumber;
-        mp3player.PlayMP3(SOUNDS[soundNumber], SONGS_LEN[soundNumber]);
+        mp3player->PlayMP3(SOUNDS[soundNumber], SONGS_LEN[soundNumber], 255, true);
         ESP_LOGI(TAG, "Set Sound to %ld", soundNumber);
-#endif
         return ErrorCode::OK;
     }
 
@@ -599,9 +545,9 @@ public:
     }
 
     ErrorCode SetAnalogOutput(float volts){
-#ifdef I2S_ACTIVE
-        mp3player.OutputConstantVoltage(volts);
-#endif
+
+        //mp3player->OutputConstantVoltage(volts);
+
         return ErrorCode::OK;
     }
     
@@ -661,7 +607,7 @@ public:
             if(mode_MOVEMENT_OR_FAN1SENSE==MODE_MOVEMENT_OR_FAN1SENSE::MOVEMENT_SENSOR){
                 //pcnt_unit_stop(speedmeter);
                 gpio_reset_pin(PIN_MOVEMENT_OR_FAN1SENSE);
-                esp32::ConfigGpioInput(PIN_MOVEMENT_OR_FAN1SENSE, GPIO_FLOATING);
+                ConfigGpioInput(PIN_MOVEMENT_OR_FAN1SENSE, GPIO_FLOATING);
             }
             else if(mode_MOVEMENT_OR_FAN1SENSE==MODE_MOVEMENT_OR_FAN1SENSE::FAN1SENSE){
                 //pcnt_unit_start(speedmeter);
@@ -674,40 +620,6 @@ public:
 
     ErrorCode InitAndRun() override
     {
-        // i2s config for reading from left channel of I2S - this is standard for microphones
-        /*
-        i2s_config_t i2sMemsConfigLeftChannel = {};
-        i2sMemsConfigLeftChannel.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX);
-        i2sMemsConfigLeftChannel.sample_rate = SAMPLE_RATE_MICROPHONE;
-        i2sMemsConfigLeftChannel.bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT;
-        i2sMemsConfigLeftChannel.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
-        i2sMemsConfigLeftChannel.communication_format = I2S_COMM_FORMAT_STAND_I2S;
-        i2sMemsConfigLeftChannel.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
-        i2sMemsConfigLeftChannel.dma_desc_num = 8;
-        i2sMemsConfigLeftChannel.dma_frame_num = 64;
-        i2sMemsConfigLeftChannel.use_apll = false;
-        i2sMemsConfigLeftChannel.tx_desc_auto_clear = false;
-        i2sMemsConfigLeftChannel.fixed_mclk = 0;
-        i2s_pin_config_t i2sPins = {};
-        i2sPins.bck_io_num = PIN_I2S_SCK;
-        i2sPins.ws_io_num = PIN_I2S_WS;
-        i2sPins.data_out_num = I2S_PIN_NO_CHANGE;
-        i2sPins.data_in_num = PIN_I2S_SD;
-        
-        i2s_driver_install(I2S_PORT_MICROPHONE, &i2sMemsConfigLeftChannel, 0, NULL);
-        i2s_set_pin(I2S_PORT_MICROPHONE, &i2sPins);
-        */
-
-        //Configure Analog (before Rotary Encoder!!!)
-#ifdef ADC_LEGACY
-        adc_chars = (esp_adc_cal_characteristics_t *)calloc(1, sizeof(esp_adc_cal_characteristics_t));
-        esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_0, ADC_WIDTH_BIT_12, DEFAULT_VREF, adc_chars);
-        adc1_config_width(ADC_WIDTH_BIT_12);
-        adc1_config_channel_atten(CHANNEL_SWITCHES, ADC_ATTEN_DB_0);
-        adc1_config_channel_atten(CHANNEL_ANALOGIN_OR_ROTB, ADC_ATTEN_DB_11);
-        adc1_config_channel_atten(CHANNEL_LDR_OR_ROTA, ADC_ATTEN_DB_11);
-#else
-
         //-------------ADC1 Init---------------//
         
         adc_oneshot_unit_init_cfg_t init_config1 = {};
@@ -729,16 +641,15 @@ public:
         cali_config.atten = ADC_ATTEN_DB_11;
         cali_config.bitwidth = ADC_BITWIDTH_DEFAULT;
         ESP_ERROR_CHECK(adc_cali_create_scheme_line_fitting(&cali_config, &this->adc1_cali_handle));
-#endif
 
         //Rotary Encoder Input
-        rotenc=new cRotaryEncoder(PIN_LDR_OR_ROTA, PIN_ANALOGIN_OR_ROTB);
+        rotenc=new cRotaryEncoder(PIN_LDR_OR_ROTA, PIN_ANALOGIN_OR_ROTB, GPIO_NUM_NC);
         ESP_ERROR_CHECK(rotenc->Init());
         ESP_ERROR_CHECK(rotenc->Start());
         
         //Relay K3 output
         gpio_set_level(PIN_K3_ON, 0);
-        esp32::ConfigGpioOutputPP(PIN_K3_ON);
+        ConfigGpioOutputPP(PIN_K3_ON);
 
         //Pulse Counter for RPM of Fan1
         //pcnt_unit_config_t unit_config = {};
@@ -785,7 +696,7 @@ public:
         ESP_ERROR_CHECK(I2C::Init(I2C_PORT, PIN_I2C_SCL, PIN_I2C_SDA));
 
         //LED Strip
-        strip = new RGBLED<LED_NUMBER, DeviceType::WS2812>();
+        strip = new RGBLED::M<LED_NUMBER, RGBLED::DeviceType::WS2812>();
         ESP_ERROR_CHECK(strip->Init(VSPI_HOST, PIN_LED_WS2812, 2 ));
         ESP_ERROR_CHECK(strip->Clear(100));
 
@@ -794,9 +705,7 @@ public:
         readBinaryAndAnalogIOs();//do this while init to avoid race condition (wifimanager is resettet when red and green buttons are pressed during startup)
         xTaskCreate(sensorTask, "sensorTask", 4096 * 4, this, 6, nullptr);
         xTaskCreate(usbpdTask, "usbpdTask", 2048 * 4, this, 16, nullptr);
-#ifdef I2S_ACTIVE
         xTaskCreate(mp3Task, "mp3task", 6144 * 4, this, 16, nullptr); //Stack Size = 4096 --> Stack overflow!!
-#endif
         return ErrorCode::OK;
     }
 
@@ -987,13 +896,13 @@ public:
         HAL_Impl *hal = (HAL_Impl *)pvParameters;
         hal->SensorLoop();
     }
-#ifdef I2S_ACTIVE
+
     static void mp3Task(void *pvParameters)
     {
         HAL_Impl *hal = (HAL_Impl *)pvParameters;
         hal->MP3Loop();
     }
-#endif
+
 
     static void usbpdTask(void *pvParameters)
     {
